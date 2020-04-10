@@ -1,0 +1,2 @@
+# MailBox-Core
+F# MailBox
