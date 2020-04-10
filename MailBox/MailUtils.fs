@@ -77,9 +77,9 @@ let setUpSmtpClient host port =
 let printMails client =
     match box client with
     | :? ImapClient as imapClient ->
-        for i = 1 to imapClient.Inbox.Count do
-            let message = imapClient.Inbox.GetMessage(i - 1)
-            Console.WriteLine("Subject: {0}", message.Subject)
+        for summary in imapClient.Inbox.Fetch(1, imapClient.Inbox.Count - 1, MessageSummaryItems.Full) do
+                Console.WriteLine ("[summary] {0:D2}: {1}", summary.Index, summary.Envelope.Subject)
+        Console.WriteLine()
         Console.WriteLine("Printed all {0} mails", imapClient.Inbox.Count)
     | :? Pop3Client as pop3Client ->
         for i = 1 to pop3Client.Count do
