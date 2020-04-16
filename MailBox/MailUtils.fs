@@ -161,7 +161,7 @@ let sendMail toAddress fromAddress subject body =
                      |> getMXRecord
                      |> getSMPTServerName) 25
             smptClient.SendCompleted.AddHandler(fun _ e -> sendMailCallback e)
-            smptClient.Send(mailMessage)
+            smptClient.SendMailAsync(mailMessage).GetAwaiter().GetResult()
         | false ->
             logError "invalid Mailid's"
             List.iter (logFunc "Error") invalidmailIds
