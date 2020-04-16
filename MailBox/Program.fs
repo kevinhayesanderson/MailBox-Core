@@ -6,7 +6,7 @@ let main _argv =
     match mainMenu() with
         | "1" -> 
             let sendMailAns = List.ofSeq(retrieveAnswers sendMailQuestions)
-            sendMail sendMailAns.[0] sendMailAns.[1] sendMailAns.[2] sendMailAns.[3] sendMailAns.[4]
+            sendMail sendMailAns.[0] sendMailAns.[1] sendMailAns.[2] sendMailAns.[3]
         | "2" ->
             let serverType = match incomingServerTypeMenu() with
                                 | "1" ->  IMAP

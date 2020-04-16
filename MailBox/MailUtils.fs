@@ -10,6 +10,8 @@ open Menu
 open MailKit.Net.Imap
 open MailKit.Net.Pop3
 open MailKit
+open System.ComponentModel
+open System.Security.Principal
 
 let mutable invalidmailIds = List<string>.Empty
 
@@ -53,11 +55,15 @@ let isValidMailAddress (mailAddress: string) =
             invalidmailIds <- mailAddress :: invalidmailIds
             false
 
+let getCurrentUserName = WindowsIdentity.GetCurrent().Name
+
+let getDomainName (mailId: string) = (mailId |> MailAddress).Host
+
 let getMXRecord domainName = (LookupClient()).Query(domainName, QueryType.MX).Answers.FirstOrDefault()
 
-let getSMPTServerName (record: DnsClient.Protocol.DnsResourceRecord) =
+let getSMPTServerName (record: Protocol.DnsResourceRecord) =
     match record with
-    | :? DnsClient.Protocol.MxRecord as mxRecord -> mxRecord.Exchange.Original.TrimEnd('.')
+    | :? Protocol.MxRecord as mxRecord -> mxRecord.Exchange.Original.TrimEnd('.')
     | _ -> ""
 
 let setUpMailMessage (toAddress: string) fromAddress subject body =
@@ -65,7 +71,9 @@ let setUpMailMessage (toAddress: string) fromAddress subject body =
     mail.From <- MailAddress(fromAddress)
     mail.To.Add(toAddress)
     mail.Subject <- subject
+    mail.SubjectEncoding <- Text.Encoding.UTF8
     mail.Body <- body
+    mail.BodyEncoding <- Text.Encoding.UTF8
     mail
 
 let setUpSmtpClient host port =
@@ -78,7 +86,7 @@ let printMails client =
     match box client with
     | :? ImapClient as imapClient ->
         for summary in imapClient.Inbox.Fetch(1, imapClient.Inbox.Count - 1, MessageSummaryItems.Full) do
-                Console.WriteLine ("[summary] {0:D2}: {1}", summary.Index, summary.Envelope.Subject)
+            Console.WriteLine("[summary] {0:D2}: {1}", summary.Index, summary.Envelope.Subject)
         Console.WriteLine()
         Console.WriteLine("Printed all {0} mails", imapClient.Inbox.Count)
     | :? Pop3Client as pop3Client ->
@@ -132,14 +140,28 @@ let setUpPOP3Client serverName (userName: string) password printMailsCallback =
         printMailsCallback pop3Client)
     pop3Client.AuthenticateAsync(userName, password).GetAwaiter().GetResult()
 
-let sendMail domainName toAddress fromAddress subject body =
+let sendMailCallback (args: AsyncCompletedEventArgs) =
+    let token = args.UserState
+    if args.Cancelled
+    then Console.WriteLine("[{0}] Send canceled.", token)
+    elif not (isNull args.Error)
+    then Console.WriteLine("[{0}] {1}", token, args.Error.ToString())
+    else Console.WriteLine("Message sent.")
+
+let sendMail toAddress fromAddress subject body =
     try
         match (isValidMailAddress toAddress) && (isValidMailAddress fromAddress) with
         | true ->
             let mailMessage = setUpMailMessage toAddress fromAddress subject body
-            let smptClient = setUpSmtpClient ((getMXRecord domainName) |> getSMPTServerName) 25
+
+            let smptClient =
+                setUpSmtpClient
+                    (fromAddress
+                     |> getDomainName
+                     |> getMXRecord
+                     |> getSMPTServerName) 25
+            smptClient.SendCompleted.AddHandler(fun _ e -> sendMailCallback e)
             smptClient.Send(mailMessage)
-            logInfo "Mail sent"
         | false ->
             logError "invalid Mailid's"
             List.iter (logFunc "Error") invalidmailIds
@@ -152,4 +174,3 @@ let receiveMail serverType serverName userName password =
         | POP3 -> setUpPOP3Client serverName userName password pop3PrintMailsCallback
         | None -> logError "Invalid servertype"
     with ex -> logError ex.Message
- 

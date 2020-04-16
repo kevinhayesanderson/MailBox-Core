@@ -43,8 +43,7 @@ let mainMenu() =
     menuOptions.Length |> getOption
 
 let sendMailQuestions =
-    [ "Enter domain name:"
-      "Enter valid recipient mailId's(Comma Seperated, if multiple):"
+    [ "Enter valid recipient mailId's(Comma Seperated, if multiple):"
       "Enter valid from MailId:"
       "Enter mail subject:"
       "Enter mail body:" ]
