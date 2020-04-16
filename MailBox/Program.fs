@@ -8,14 +8,8 @@ let main _argv =
             let sendMailAns = List.ofSeq(retrieveAnswers sendMailQuestions)
             sendMail sendMailAns.[0] sendMailAns.[1] sendMailAns.[2] sendMailAns.[3]
         | "2" ->
-            let serverType = match incomingServerTypeMenu() with
-                                | "1" ->  IMAP
-                                | "2" ->  POP3
-                                | _ -> 
-                                    logInvalidOption()
-                                    None
             let receiveMailAns = List.ofSeq(retrieveAnswers receiveMailQuestions)
-            receiveMail serverType receiveMailAns.[0] receiveMailAns.[1] receiveMailAns.[2]
+            receiveMail receiveMailAns.[0] receiveMailAns.[1] receiveMailAns.[2]
         | _ -> 
             logInvalidOption()
     let _key = System.Console.ReadKey()

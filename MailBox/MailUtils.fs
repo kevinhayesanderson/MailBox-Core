@@ -13,6 +13,64 @@ open MailKit
 open System.ComponentModel
 open System.Security.Principal
 
+type ServerName =
+    | IMAP
+    | POP3
+    | SMPT
+    | None
+
+type ServerType =
+    | Incoming
+    | Outgoing
+
+type AuthenticationType =
+    | AUTH
+    | StartTLS
+    | SSL
+
+type DefaultPortInfo =
+    { Name: ServerName
+      Type: ServerType
+      Authentication: AuthenticationType
+      Port: int }
+
+let defaultServerInfo =
+    ([ { Name = SMPT
+         Type = Outgoing
+         Authentication = AUTH
+         Port = 25 }
+       { Name = SMPT
+         Type = Outgoing
+         Authentication = AUTH
+         Port = 26 }
+       { Name = SMPT
+         Type = Outgoing
+         Authentication = StartTLS
+         Port = 587 }
+       { Name = SMPT
+         Type = Outgoing
+         Authentication = SSL
+         Port = 465 }
+       { Name = POP3
+         Type = Incoming
+         Authentication = AUTH
+         Port = 110 }
+       { Name = POP3
+         Type = Incoming
+         Authentication = SSL
+         Port = 995 }
+       { Name = IMAP
+         Type = Incoming
+         Authentication = AUTH
+         Port = 143 }
+       { Name = IMAP
+         Type = Incoming
+         Authentication = SSL
+         Port = 993 } ])
+
+let getPort (name: ServerName) (auth: AuthenticationType) =
+    defaultServerInfo.FirstOrDefault(fun si -> si.Name.Equals(name) && (si.Authentication.Equals(auth))).Port
+
 let mutable invalidmailIds = List<string>.Empty
 
 let isValidEmail mailId =
@@ -40,9 +98,9 @@ let isValidEmail mailId =
 let validateMailIds mailIds = List.partition isValidEmail mailIds
 
 let isValidMailAddress (mailAddress: string) =
-    match mailAddress.Contains(',') with
+    match mailAddress.Contains(',') || mailAddress.Contains(';') with
     | true ->
-        let invalidMailIds = snd (validateMailIds (List.ofArray (mailAddress.Split(','))))
+        let invalidMailIds = snd (validateMailIds (List.ofArray (mailAddress.Split(',', ';'))))
         match (invalidMailIds).Any() with
         | true ->
             invalidmailIds <- invalidmailIds @ invalidMailIds
@@ -79,6 +137,7 @@ let setUpMailMessage (toAddress: string) fromAddress subject body =
 let setUpSmtpClient host port =
     let smtpClient = new SmtpClient(host, port)
     //smtpClient.Credentials <- new System.Net.NetworkCredential("username", "password")
+    smtpClient.UseDefaultCredentials <- true
     smtpClient.EnableSsl <- true
     smtpClient
 
@@ -112,7 +171,10 @@ let setUpIMAPClient serverName (userName: string) password printMailsCallback =
         (fun args ->
             Console.WriteLine
                 ("IMAP Client Connected: Host-{0} Port-{1} SecureSocketOption-{2}", args.Host, args.Port, args.Options))
-    imapClient.ConnectAsync(serverName, 993, true).GetAwaiter().GetResult()
+    imapClient.ConnectAsync(serverName,
+                            IMAP
+                            |> getPort
+                            <| SSL, true).GetAwaiter().GetResult()
     imapClient.Authenticated
     |> Event.add (fun args ->
         Console.WriteLine(args.Message)
@@ -133,7 +195,10 @@ let setUpPOP3Client serverName (userName: string) password printMailsCallback =
         (fun args ->
             Console.WriteLine
                 ("POP3 Client Connected: Host-{0} Port-{1} SecureSocketOption-{2}", args.Host, args.Port, args.Options))
-    pop3Client.ConnectAsync(serverName, 110, true).GetAwaiter().GetResult()
+    pop3Client.ConnectAsync(serverName,
+                            POP3
+                            |> getPort
+                            <| SSL, true).GetAwaiter().GetResult()
     pop3Client.Authenticated
     |> Event.add (fun args ->
         Console.WriteLine(args.Message)
@@ -159,7 +224,10 @@ let sendMail toAddress fromAddress subject body =
                     (fromAddress
                      |> getDomainName
                      |> getMXRecord
-                     |> getSMPTServerName) 25
+                     |> getSMPTServerName)
+                    (SMPT
+                     |> getPort
+                     <| SSL)
             smptClient.SendCompleted.AddHandler(fun _ e -> sendMailCallback e)
             smptClient.SendMailAsync(mailMessage).GetAwaiter().GetResult()
         | false ->
@@ -167,10 +235,18 @@ let sendMail toAddress fromAddress subject body =
             List.iter (logFunc "Error") invalidmailIds
     with ex -> logError ex.Message
 
-let receiveMail serverType serverName userName password =
+let getServerType (serverName: string) =
+    match serverName with
+    | serverName when serverName.Contains("IMAP") -> IMAP
+    | serverName when serverName.Contains("imap") -> IMAP
+    | serverName when serverName.Contains("POP") -> POP3
+    | serverName when serverName.Contains("pop") -> POP3
+    | _ -> None
+
+let receiveMail serverName userName password =
     try
-        match serverType with
+        match getServerType (serverName) with
         | IMAP -> setUpIMAPClient serverName userName password imapPrintMailsCallback
         | POP3 -> setUpPOP3Client serverName userName password pop3PrintMailsCallback
-        | None -> logError "Invalid servertype"
+        | _ -> logError "Invalid servertype"
     with ex -> logError ex.Message

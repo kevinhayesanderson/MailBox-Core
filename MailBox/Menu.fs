@@ -16,13 +16,6 @@ let logInvalidOption = (fun () -> logFunc "Error" "Invalid option")
 
 let menuOptions = [ "Send Mail"; "Read Mail" ]
 
-let incomingServerTypeOptions = [ "IMAP"; "POP3" ]
-
-type IncomingMailServerType =
-    | IMAP
-    | POP3
-    | None
-
 let printOptions options = options |> List.iteri (fun i x -> Console.WriteLine("{0}. {1}", (i + 1), x))
 
 let getOption n =
@@ -32,18 +25,13 @@ let getOption n =
     Console.WriteLine()
     Console.ReadLine().Trim()
 
-let incomingServerTypeMenu() =
-    Console.WriteLine("Choose Incoming mail server type")
-    incomingServerTypeOptions |> printOptions
-    incomingServerTypeOptions.Length |> getOption
-
 let mainMenu() =
     Console.WriteLine("Menu:")
     menuOptions |> printOptions
     menuOptions.Length |> getOption
 
 let sendMailQuestions =
-    [ "Enter valid recipient mailId's(Comma Seperated, if multiple):"
+    [ "Enter valid recipient mailId's(Comma or semicolon Seperated, if multiple):"
       "Enter valid from MailId:"
       "Enter mail subject:"
       "Enter mail body:" ]
