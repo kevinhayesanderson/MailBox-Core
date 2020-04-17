@@ -1,8 +1,22 @@
 ﻿open Menu
 open MailUtils
+open Hopac
+open Logary
+open Logary.Message
+open Logary.Configuration
+open Logary.Targets
 
 [<EntryPoint>]
 let main _argv =
+    let logary =
+        Config.create "Mailbox-Core" "local"
+        |> Config.target (LiterateConsole.create LiterateConsole.empty "console")
+        |> Config.ilogger (ILogger.Console Debug)
+        |> Config.build
+        |> run
+
+    let logger = logary.getLogger "Program"
+
     match mainMenu() with
         | "1" -> 
             let sendMailAns = List.ofSeq(retrieveAnswers sendMailQuestions)
@@ -11,6 +25,8 @@ let main _argv =
             let receiveMailAns = List.ofSeq(retrieveAnswers receiveMailQuestions)
             receiveMail receiveMailAns.[0] receiveMailAns.[1] receiveMailAns.[2]
         | _ -> 
-            logInvalidOption()
+            event Error "Invalid option"
+            |> Logger.logSimple logger
+    
     let _key = System.Console.ReadKey()
     0 

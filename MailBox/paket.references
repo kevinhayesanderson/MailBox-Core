@@ -2,3 +2,8 @@ DnsClient
 FSharp.Core
 MailKit
 System.ValueTuple
+Expecto
+Expecto.BenchmarkDotNet
+Expecto.FsCheck
+Expecto.Hopac
+logary
