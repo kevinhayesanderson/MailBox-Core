@@ -130,7 +130,7 @@ let getSMPTServerName (record: Protocol.DnsResourceRecord) =
 let setUpMailMessage (toAddress: string) fromAddress subject body =
     let mail = new MailMessage()
     mail.From <- MailAddress(fromAddress)
-    mail.To.Add(toAddress)
+    mail.To.Add(toAddress.Replace(";",","))
     mail.Subject <- subject
     mail.SubjectEncoding <- Text.Encoding.UTF8
     mail.Body <- body
@@ -141,6 +141,8 @@ let setUpSmtpClient host port =
     let smtpClient = new SmtpClient(host, port)
     //smtpClient.Credentials <- new System.Net.NetworkCredential("username", "password")
     smtpClient.EnableSsl <- true
+    smtpClient.DeliveryFormat <- SmtpDeliveryFormat.International
+    smtpClient.DeliveryMethod <- SmtpDeliveryMethod.Network
     smtpClient
 
 let printMails client =
@@ -163,7 +165,8 @@ let imapPrintMailsCallback =
         inbox.Open(FolderAccess.ReadOnly) |> ignore
         Console.WriteLine("Total messages: {0}", inbox.Count)
         printMails imapClient
-        imapClient.Disconnect(true))
+        imapClient.Disconnect(true)
+        imapClient.Dispose())
 
 let setUpIMAPClient serverName (userName: string) password printMailsCallback =
     let imapClient = new ImapClient()
@@ -187,7 +190,8 @@ let pop3PrintMailsCallback =
     (fun (pop3Client: Pop3Client) ->
         Console.WriteLine("Total messages: {0}", pop3Client.Count)
         printMails pop3Client
-        pop3Client.Disconnect(true))
+        pop3Client.Disconnect(true)
+        pop3Client.Dispose())
 
 let setUpPOP3Client serverName (userName: string) password printMailsCallback =
     let pop3Client = new Pop3Client()
@@ -209,11 +213,18 @@ let setUpPOP3Client serverName (userName: string) password printMailsCallback =
 
 let sendMailCallback (args: AsyncCompletedEventArgs) =
     let token = args.UserState
-    if args.Cancelled
-    then Console.WriteLine("[{0}] Send canceled.", token)
-    elif not (isNull args.Error)
-    then Console.WriteLine("[{0}] {1}", token, args.Error.ToString())
-    else Console.WriteLine("Message sent.")
+    if args.Cancelled then
+        Error
+        |> event
+        <| String.Format("[{0}]  Send canceled.", token)
+        |> Logger.logSimple logger
+    elif not (isNull args.Error) then
+        Error
+        |> event
+        <| String.Format("[{0}] {1}", token, args.Error.ToString())
+        |> Logger.logSimple logger
+    else
+        event Info "Message sent." |> Logger.logSimple logger
 
 let sendMail toAddress fromAddress subject body =
     try
@@ -230,8 +241,26 @@ let sendMail toAddress fromAddress subject body =
                     (SMPT
                      |> getPort
                      <| AUTH)
-            smptClient.SendCompleted.AddHandler(fun _ e -> sendMailCallback e)
-            smptClient.SendMailAsync(mailMessage).GetAwaiter().GetResult()
+            smptClient.SendCompleted.AddHandler(fun _ e ->
+                sendMailCallback e
+                mailMessage.Dispose()
+                smptClient.Dispose())
+            Info
+            |> event
+            <| String.Format("Sending an email message to {0} using the SMTP host {1}.", toAddress, smptClient.Host)
+            |> Logger.logSimple logger
+            try
+                smptClient.SendMailAsync(mailMessage).GetAwaiter().GetResult()
+            with :? SmtpFailedRecipientsException as smptEx ->
+                for i = 0 to smptEx.InnerExceptions.Length - 1 do
+                    let status = smptEx.InnerExceptions.[i].StatusCode
+                    if (status.Equals(SmtpStatusCode.MailboxBusy) || status.Equals(SmtpStatusCode.MailboxUnavailable)) then
+                        event Error "Delivery failed - retrying in 5 seconds." |> Logger.logSimple logger
+                        System.Threading.Thread.Sleep(5000)
+                        smptClient.Send(mailMessage)
+                    else
+                        event Error ("Failed to deliver message to " + smptEx.InnerExceptions.[i].FailedRecipient)
+                        |> Logger.logSimple logger
         | false ->
             event Error "Invalid mailid's"
             |> setField "mailId's" invalidmailIds
@@ -241,7 +270,7 @@ let sendMail toAddress fromAddress subject body =
 
 let getServerType (serverName: string) =
     match serverName with
-    | serverName when serverName.Contains("IMAP") || serverName.Contains("imap") -> IMAP
+    | serverName when serverName.Contains("IMAP") || serverName.Contains("imap") || serverName.Contains("Imap") -> IMAP
     | serverName when serverName.Contains("POP") || serverName.Contains("pop") -> POP3
     | _ -> None
 
