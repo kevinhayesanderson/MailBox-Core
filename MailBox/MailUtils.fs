@@ -198,9 +198,11 @@ let setUpSmtpClient host =
                                SMPT
                                |> getPort
                                <| SSL)
-            client.UseDefaultCredentials <- false
+            // client.UseDefaultCredentials <- false
             client.Credentials <- Net.NetworkCredential(userName, password)
+            //client.Credentials <- Net.CredentialCache.DefaultNetworkCredentials
             client
+    smtpClient.Timeout <- 9000
     smtpClient.EnableSsl <- true
     smtpClient.DeliveryFormat <- SmtpDeliveryFormat.International
     smtpClient.DeliveryMethod <- SmtpDeliveryMethod.Network
