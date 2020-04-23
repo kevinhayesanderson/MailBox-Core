@@ -4,6 +4,7 @@
     <TargetFramework>netcoreapp3.1</TargetFramework>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="Menu.fs" />
     <Compile Include="MailUtils.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
