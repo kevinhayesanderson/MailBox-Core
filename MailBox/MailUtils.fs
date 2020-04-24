@@ -73,6 +73,10 @@ let timeout = 9000
 
 let logger = Log.create "MailUtils"
 
+let logInfo info = event Info info |> Logger.logSimple logger
+
+let logError errorInfo = event Error errorInfo |> Logger.logSimple logger
+
 let getPort (name: ServerName) (auth: AuthenticationType) =
     defaultServerInfo.FirstOrDefault(fun si -> si.Name.Equals(name) && (si.Authentication.Equals(auth))).Port
 
@@ -162,13 +166,11 @@ let setUpSmptClient =
     client.Timeout <- timeout
     client.Connected
     |> Event.add (fun args ->
-        Info
-        |> event
-        <| String.Format
+        String.Format
             ("SMPT Client Connected: Host-{0} Port-{1} SecureSocketOption-{2}", args.Host, args.Port, args.Options)
-        |> Logger.logSimple logger)
-    client.Disconnected |> Event.add (fun args -> event Info "SMPT Client Disconnected" |> Logger.logSimple logger)
-    client.MessageSent |> Event.add (fun args -> event Info args.Response |> Logger.logSimple logger)
+        |> logInfo)
+    client.Disconnected |> Event.add (fun _ -> logInfo "SMPT Client Disconnected")
+    client.MessageSent |> Event.add (fun args -> logInfo args.Response)
     client
 
 let send (client: Net.Smtp.SmtpClient) mailId message =
@@ -185,10 +187,7 @@ let send (client: Net.Smtp.SmtpClient) mailId message =
     client.Connect(host, port, Security.SecureSocketOptions.None)
     let options = FormatOptions.Default.Clone()
     if (client.Capabilities.HasFlag(Net.Smtp.SmtpCapabilities.UTF8)) then options.International <- true
-    Info
-    |> event
-    <| String.Format("Sending an mail to {0} ", mailId)
-    |> Logger.logSimple logger
+    String.Format("Sending an mail to {0} ", mailId) |> logInfo
     client.Send(options, message)
     client.Disconnect(true)
 
@@ -205,10 +204,10 @@ let sendMail toAddress fromAddress subject messageBody =
             | false -> send smtpClient toAddress message
             smtpClient.Dispose()
         | false ->
-            event Error "Invalid mailid's" |> Logger.logSimple logger
+            "Invalid mailid's" |> logError
             for mailId in invalidmailIds do
-                event Error mailId |> Logger.logSimple logger
-    with ex -> event Error ex.Message |> Logger.logSimple logger
+                mailId |> logError
+    with ex -> ex.Message |> logError
 
 let printMails client =
     match box client with
@@ -287,5 +286,5 @@ let receiveMail serverName userName password =
         match getServerType (serverName) with
         | IMAP -> setUpIMAPClient serverName userName password imapPrintMailsCallback
         | POP3 -> setUpPOP3Client serverName userName password pop3PrintMailsCallback
-        | _ -> event Error "Invalid Servertype" |> Logger.logSimple logger
-    with ex -> event Error ex.Message |> Logger.logSimple logger
+        | _ -> "Invalid Servertype" |> logError
+    with ex -> ex.Message |> logError
