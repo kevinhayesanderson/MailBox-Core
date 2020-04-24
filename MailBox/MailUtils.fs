@@ -218,7 +218,7 @@ let sendMany (client: Net.Smtp.SmtpClient) toAddress message =
             for mailId in mailIds |> Seq.distinct do
                 String.Format("Sending an mail to {0} ", mailId.ToString()) |> logInfo
                 client.Send(options, message)
-                client.Disconnect(true))
+            client.Disconnect(true))
     | (false, _) ->
         let host =
             getDomainNamesFor toAddress
@@ -232,9 +232,11 @@ let sendMany (client: Net.Smtp.SmtpClient) toAddress message =
         client.Connect(host, port, Security.SecureSocketOptions.None)
         let options = FormatOptions.Default.Clone()
         if (client.Capabilities.HasFlag(Net.Smtp.SmtpCapabilities.UTF8)) then options.International <- true
-        List.iter (fun mailId ->
+        toAddresses
+        |> List.distinct
+        |> List.iter (fun mailId ->
             String.Format("Sending an mail to {0} ", mailId.ToString()) |> logInfo
-            client.Send(options, message)) toAddresses
+            client.Send(options, message))
         client.Disconnect(true)
 
 let sendMail toAddress fromAddress subject messageBody =
