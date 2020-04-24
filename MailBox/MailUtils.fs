@@ -173,6 +173,13 @@ let setUpSmptClient =
     client.MessageSent |> Event.add (fun args -> logInfo args.Response)
     client
 
+let hasMultipleDomains (toAddresses: InternetAddress list) =
+    let groupedMailIds =
+        toAddresses
+        |> Seq.ofList
+        |> Seq.groupBy (fun mailId -> mailId.ToString() |> getDomainName)
+    if groupedMailIds.Count() > 1 then (true, groupedMailIds) else (false, Seq.empty)
+
 let send (client: Net.Smtp.SmtpClient) mailId message =
     let host =
         mailId
@@ -191,6 +198,45 @@ let send (client: Net.Smtp.SmtpClient) mailId message =
     client.Send(options, message)
     client.Disconnect(true)
 
+let sendMany (client: Net.Smtp.SmtpClient) toAddress message =
+    match hasMultipleDomains toAddresses with
+    | (true, mailIds) ->
+        mailIds
+        |> Seq.iter (fun (domainName, mailIds) ->
+            let host =
+                domainName
+                |> getMXRecord
+                |> getSMPTServerName
+
+            let port =
+                SMPT
+                |> getPort
+                <| AUTH
+            client.Connect(host, port, Security.SecureSocketOptions.None)
+            let options = FormatOptions.Default.Clone()
+            if (client.Capabilities.HasFlag(Net.Smtp.SmtpCapabilities.UTF8)) then options.International <- true
+            for mailId in mailIds |> Seq.distinct do
+                String.Format("Sending an mail to {0} ", mailId.ToString()) |> logInfo
+                client.Send(options, message)
+                client.Disconnect(true))
+    | (false, _) ->
+        let host =
+            getDomainNamesFor toAddress
+            |> getMXRecord
+            |> getSMPTServerName
+
+        let port =
+            SMPT
+            |> getPort
+            <| AUTH
+        client.Connect(host, port, Security.SecureSocketOptions.None)
+        let options = FormatOptions.Default.Clone()
+        if (client.Capabilities.HasFlag(Net.Smtp.SmtpCapabilities.UTF8)) then options.International <- true
+        List.iter (fun mailId ->
+            String.Format("Sending an mail to {0} ", mailId.ToString()) |> logInfo
+            client.Send(options, message)) toAddresses
+        client.Disconnect(true)
+
 let sendMail toAddress fromAddress subject messageBody =
     try
         match (isValidMailAddress toAddress) && (isValidMailAddress fromAddress) with
@@ -198,9 +244,7 @@ let sendMail toAddress fromAddress subject messageBody =
             let message = setUpMailMessage toAddress fromAddress subject messageBody
             let smtpClient = setUpSmptClient
             match isMultipleToAddresses with
-            | true ->
-                for mailid in toAddresses do
-                    send smtpClient (mailid.ToString()) message
+            | true -> sendMany smtpClient toAddress message
             | false -> send smtpClient toAddress message
             smtpClient.Dispose()
         | false ->
