@@ -9,11 +9,9 @@ open System.Linq
 open MailKit.Net.Imap
 open MailKit.Net.Pop3
 open MailKit
-open System.ComponentModel
-open System.Security.Principal
+open MimeKit
 open Logary
 open Logary.Message
-open Menu
 
 type ServerName =
     | IMAP
@@ -71,12 +69,16 @@ let defaultServerInfo =
          Authentication = SSL
          Port = 993 } ])
 
-let getPort (name: ServerName) (auth: AuthenticationType) =
-    defaultServerInfo.FirstOrDefault(fun si -> si.Name.Equals(name) && (si.Authentication.Equals(auth))).Port
+let timeout = 9000
 
 let logger = Log.create "MailUtils"
 
-let mutable multipleToAddresses = false
+let getPort (name: ServerName) (auth: AuthenticationType) =
+    defaultServerInfo.FirstOrDefault(fun si -> si.Name.Equals(name) && (si.Authentication.Equals(auth))).Port
+
+let mutable isMultipleToAddresses = false
+
+let mutable toAddresses: InternetAddress list = []
 
 let mutable invalidmailIds = List<string>.Empty
 
@@ -107,8 +109,10 @@ let validateMailIds mailIds = List.partition isValidEmail mailIds
 let isValidMailAddress (mailAddress: string) =
     match mailAddress.Contains(',') || mailAddress.Contains(';') with
     | true ->
-        let invalidMailIds = snd (validateMailIds (List.ofArray (mailAddress.Split(',', ';'))))
-        multipleToAddresses <- true
+        let (validMailIds, invalidMailIds) = validateMailIds (List.ofArray (mailAddress.Split(',', ';')))
+        for mailId in validMailIds do
+            toAddresses <- InternetAddress.Parse(mailId) :: toAddresses
+        isMultipleToAddresses <- true
         match (invalidMailIds).Any() with
         | true ->
             invalidmailIds <- invalidmailIds @ invalidMailIds
@@ -121,12 +125,10 @@ let isValidMailAddress (mailAddress: string) =
             invalidmailIds <- mailAddress :: invalidmailIds
             false
 
-let getCurrentUserName = WindowsIdentity.GetCurrent().Name
-
 let getDomainName (mailId: string) = (mailId |> MailAddress).Host
 
 let getDomainNamesFor (mailIds: string) =
-    match multipleToAddresses with
+    match isMultipleToAddresses with
     | true ->
         let mutable domainNames = []
         List.iter (fun mailId -> domainNames <- (getDomainName mailId) :: domainNames)
@@ -143,70 +145,55 @@ let getSMPTServerName (record: Protocol.DnsResourceRecord) =
     | :? Protocol.MxRecord as mxRecord -> mxRecord.Exchange.Original.TrimEnd('.')
     | _ -> ""
 
-let sendMailCallback (args: AsyncCompletedEventArgs) =
-    let token = args.UserState
-    if args.Cancelled then
-        Error
-        |> event
-        <| String.Format("[{0}]  Send canceled.", token)
-        |> Logger.logSimple logger
-    elif not (isNull args.Error) then
-        Error
-        |> event
-        <| String.Format("[{0}] {1}", token, args.Error.ToString())
-        |> Logger.logSimple logger
-    else
-        event Info "Message sent." |> Logger.logSimple logger
-
-let mutable authMethod = AUTH
-
-let getAuth fromAddress toAddress =
-    authMethod <-
-        if (getDomainName fromAddress).Equals(getDomainNamesFor toAddress)
-        then AUTH
-        else Other
-
-let setUpMailMessage (toAddress: string) fromAddress subject body =
-    let mail = new MailMessage()
-    mail.From <- MailAddress(fromAddress)
-    mail.To.Add(toAddress.Replace(";", ","))
-    mail.Subject <- subject
-    mail.SubjectEncoding <- Text.Encoding.UTF8
-    mail.Body <- body
-    mail.BodyEncoding <- Text.Encoding.UTF8
-    mail
-
-let setUpSmtpClient host =
-    let mutable userName = String.Empty
-    let mutable password = String.Empty
-
-    let smtpClient =
-        match authMethod with
-        | AUTH ->
-            let client =
-                new SmtpClient(host,
-                               SMPT
-                               |> getPort
-                               <| AUTH)
-            client
-        | _ ->
-            let ans = List.ofSeq (retrieveAnswers userNamePasswordQ's)
-            userName <- ans.[0]
-            password <- ans.[1]
-            let client =
-                new SmtpClient(host,
-                               SMPT
-                               |> getPort
-                               <| SSL)
-            // client.UseDefaultCredentials <- false
-            client.Credentials <- Net.NetworkCredential(userName, password)
-            //client.Credentials <- Net.CredentialCache.DefaultNetworkCredentials
-            client
-    smtpClient.Timeout <- 9000
-    smtpClient.EnableSsl <- true
-    smtpClient.DeliveryFormat <- SmtpDeliveryFormat.International
-    smtpClient.DeliveryMethod <- SmtpDeliveryMethod.Network
-    smtpClient
+let sendMail toAddress fromAddress subject messageBody =
+    try
+        match (isValidMailAddress toAddress) && (isValidMailAddress fromAddress) with
+        | true ->
+            let message = MimeMessage()
+            message.From.Add(MailboxAddress(fromAddress, fromAddress))
+            if isMultipleToAddresses
+            then message.To.AddRange(toAddresses)
+            else message.To.Add(InternetAddress.Parse(toAddress))
+            message.Subject <- subject
+            let body = TextPart("plain")
+            body.Text <- messageBody
+            message.Body <- body
+            let client = new Net.Smtp.SmtpClient()
+            client.Timeout <- timeout
+            client.Connected
+            |> Event.add (fun args ->
+                Info
+                |> event
+                <| String.Format
+                    ("SMPT Client Connected: Host-{0} Port-{1} SecureSocketOption-{2}", args.Host, args.Port,
+                     args.Options)
+                |> Logger.logSimple logger)
+            client.Connect
+                ((toAddress
+                  |> getDomainNamesFor
+                  |> getMXRecord
+                  |> getSMPTServerName),
+                 SMPT
+                 |> getPort
+                 <| AUTH, Security.SecureSocketOptions.None)
+            let options = FormatOptions.Default.Clone()
+            if (client.Capabilities.HasFlag(Net.Smtp.SmtpCapabilities.UTF8)) then options.International <- true
+            client.MessageSent |> Event.add (fun args -> event Info args.Response |> Logger.logSimple logger)
+            client.Send(options, message)
+            client.Disconnected
+            |> Event.add (fun args ->
+                Info
+                |> event
+                <| String.Format
+                    ("SMPT Client Disconnected: Host-{0} Port-{1} SecureSocketOption-{2}", args.Host, args.Port,
+                     args.Options)
+                |> Logger.logSimple logger)
+            client.Disconnect(true)
+        | false ->
+            event Error "Invalid mailid's" |> Logger.logSimple logger
+            for mailId in invalidmailIds do
+                event Error mailId |> Logger.logSimple logger
+    with ex -> event Error ex.Message |> Logger.logSimple logger
 
 let printMails client =
     match box client with
@@ -233,7 +220,7 @@ let imapPrintMailsCallback =
 
 let setUpIMAPClient serverName (userName: string) password printMailsCallback =
     let imapClient = new ImapClient()
-    imapClient.Timeout <- 9000
+    imapClient.Timeout <- timeout
     imapClient.Connected
     |> Event.add
         (fun args ->
@@ -258,7 +245,7 @@ let pop3PrintMailsCallback =
 
 let setUpPOP3Client serverName (userName: string) password printMailsCallback =
     let pop3Client = new Pop3Client()
-    pop3Client.Timeout <- 9000
+    pop3Client.Timeout <- timeout
     pop3Client.Connected
     |> Event.add
         (fun args ->
@@ -274,45 +261,6 @@ let setUpPOP3Client serverName (userName: string) password printMailsCallback =
         printMailsCallback pop3Client)
     pop3Client.AuthenticateAsync(userName, password).GetAwaiter().GetResult()
 
-let sendMail toAddress fromAddress subject body =
-    try
-        match (isValidMailAddress toAddress) && (isValidMailAddress fromAddress) with
-        | true ->
-            let mailMessage = setUpMailMessage toAddress fromAddress subject body
-            getAuth fromAddress toAddress
-            let smptClient =
-                setUpSmtpClient
-                    (toAddress
-                     |> getDomainNamesFor
-                     |> getMXRecord
-                     |> getSMPTServerName)
-            smptClient.SendCompleted.AddHandler(fun _ e ->
-                sendMailCallback e
-                mailMessage.Dispose()
-                smptClient.Dispose())
-            Info
-            |> event
-            <| String.Format("Sending an email message to {0} using the SMTP host {1}.", toAddress, smptClient.Host)
-            |> Logger.logSimple logger
-            try
-                smptClient.SendMailAsync(mailMessage).GetAwaiter().GetResult()
-            with :? SmtpFailedRecipientsException as smptEx ->
-                for i = 0 to smptEx.InnerExceptions.Length - 1 do
-                    let status = smptEx.InnerExceptions.[i].StatusCode
-                    if (status.Equals(SmtpStatusCode.MailboxBusy) || status.Equals(SmtpStatusCode.MailboxUnavailable)) then
-                        event Error "Delivery failed - retrying in 5 seconds." |> Logger.logSimple logger
-                        System.Threading.Thread.Sleep(5000)
-                        smptClient.Send(mailMessage)
-                    else
-                        event Error ("Failed to deliver message to " + smptEx.InnerExceptions.[i].FailedRecipient)
-                        |> Logger.logSimple logger
-        | false ->
-            event Error "Invalid mailid's"
-            |> setField "mailId's" invalidmailIds
-            |> Logger.logSimple logger
-
-    with ex -> event Error ex.Message |> Logger.logSimple logger
-
 let getServerType (serverName: string) =
     match serverName with
     | serverName when serverName.Contains("IMAP") || serverName.Contains("imap") || serverName.Contains("Imap") -> IMAP
@@ -326,13 +274,3 @@ let receiveMail serverName userName password =
         | POP3 -> setUpPOP3Client serverName userName password pop3PrintMailsCallback
         | _ -> event Error "Invalid servertype" |> Logger.logSimple logger
     with ex -> event Error ex.Message |> Logger.logSimple logger
-
-// let oApp = ApplicationClass()
-
-// let sendMailOutlook (mailSubject: string) (mailContent: string) (address: string) =
-//     let oMsg = oApp.CreateItem(OlItemType.olMailItem) :?> MailItem
-//     let oRecip = oMsg.Recipients.Add(address)
-//     oRecip.Resolve() |> ignore
-//     oMsg.Subject <- mailSubject
-//     oMsg.HTMLBody <- mailContent
-//     oMsg.Send()

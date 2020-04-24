@@ -27,7 +27,6 @@ let main _argv =
         | _ -> 
             event Error "Invalid option"
             |> Logger.logSimple logger
-    // sendMailOutlook "" "" "kevin.hayes@ambigai.net"
-    
+
     let _key = System.Console.ReadKey()
     0 
