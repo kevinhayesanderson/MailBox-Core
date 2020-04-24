@@ -80,7 +80,7 @@ let mutable isMultipleToAddresses = false
 
 let mutable toAddresses: InternetAddress list = []
 
-let mutable invalidmailIds = List<string>.Empty
+let mutable invalidmailIds: string list = []
 
 let isValidEmail mailId =
     if String.IsNullOrWhiteSpace(mailId) then
@@ -145,50 +145,65 @@ let getSMPTServerName (record: Protocol.DnsResourceRecord) =
     | :? Protocol.MxRecord as mxRecord -> mxRecord.Exchange.Original.TrimEnd('.')
     | _ -> ""
 
+let setUpMailMessage (toAddress: string) fromAddress subject messageBody =
+    let message = MimeMessage()
+    message.From.Add(MailboxAddress(fromAddress, fromAddress))
+    if isMultipleToAddresses
+    then message.To.AddRange(toAddresses)
+    else message.To.Add(InternetAddress.Parse(toAddress))
+    message.Subject <- subject
+    let body = TextPart("plain")
+    body.Text <- messageBody
+    message.Body <- body
+    message
+
+let setUpSmptClient =
+    let client = new Net.Smtp.SmtpClient()
+    client.Timeout <- timeout
+    client.Connected
+    |> Event.add (fun args ->
+        Info
+        |> event
+        <| String.Format
+            ("SMPT Client Connected: Host-{0} Port-{1} SecureSocketOption-{2}", args.Host, args.Port, args.Options)
+        |> Logger.logSimple logger)
+    client.Disconnected |> Event.add (fun args -> event Info "SMPT Client Disconnected" |> Logger.logSimple logger)
+    client.MessageSent |> Event.add (fun args -> event Info args.Response |> Logger.logSimple logger)
+    client
+
+let send (client: Net.Smtp.SmtpClient) mailId message =
+    let host =
+        mailId
+        |> getDomainNamesFor
+        |> getMXRecord
+        |> getSMPTServerName
+
+    let port =
+        SMPT
+        |> getPort
+        <| AUTH
+    client.Connect(host, port, Security.SecureSocketOptions.None)
+    let options = FormatOptions.Default.Clone()
+    if (client.Capabilities.HasFlag(Net.Smtp.SmtpCapabilities.UTF8)) then options.International <- true
+    Info
+    |> event
+    <| String.Format("Sending an mail to {0} ", mailId)
+    |> Logger.logSimple logger
+    client.Send(options, message)
+    client.Disconnect(true)
+
 let sendMail toAddress fromAddress subject messageBody =
     try
         match (isValidMailAddress toAddress) && (isValidMailAddress fromAddress) with
         | true ->
-            let message = MimeMessage()
-            message.From.Add(MailboxAddress(fromAddress, fromAddress))
-            if isMultipleToAddresses
-            then message.To.AddRange(toAddresses)
-            else message.To.Add(InternetAddress.Parse(toAddress))
-            message.Subject <- subject
-            let body = TextPart("plain")
-            body.Text <- messageBody
-            message.Body <- body
-            let client = new Net.Smtp.SmtpClient()
-            client.Timeout <- timeout
-            client.Connected
-            |> Event.add (fun args ->
-                Info
-                |> event
-                <| String.Format
-                    ("SMPT Client Connected: Host-{0} Port-{1} SecureSocketOption-{2}", args.Host, args.Port,
-                     args.Options)
-                |> Logger.logSimple logger)
-            client.Connect
-                ((toAddress
-                  |> getDomainNamesFor
-                  |> getMXRecord
-                  |> getSMPTServerName),
-                 SMPT
-                 |> getPort
-                 <| AUTH, Security.SecureSocketOptions.None)
-            let options = FormatOptions.Default.Clone()
-            if (client.Capabilities.HasFlag(Net.Smtp.SmtpCapabilities.UTF8)) then options.International <- true
-            client.MessageSent |> Event.add (fun args -> event Info args.Response |> Logger.logSimple logger)
-            client.Send(options, message)
-            client.Disconnected
-            |> Event.add (fun args ->
-                Info
-                |> event
-                <| String.Format
-                    ("SMPT Client Disconnected: Host-{0} Port-{1} SecureSocketOption-{2}", args.Host, args.Port,
-                     args.Options)
-                |> Logger.logSimple logger)
-            client.Disconnect(true)
+            let message = setUpMailMessage toAddress fromAddress subject messageBody
+            let smtpClient = setUpSmptClient
+            match isMultipleToAddresses with
+            | true ->
+                for mailid in toAddresses do
+                    send smtpClient (mailid.ToString()) message
+            | false -> send smtpClient toAddress message
+            smtpClient.Dispose()
         | false ->
             event Error "Invalid mailid's" |> Logger.logSimple logger
             for mailId in invalidmailIds do
@@ -272,5 +287,5 @@ let receiveMail serverName userName password =
         match getServerType (serverName) with
         | IMAP -> setUpIMAPClient serverName userName password imapPrintMailsCallback
         | POP3 -> setUpPOP3Client serverName userName password pop3PrintMailsCallback
-        | _ -> event Error "Invalid servertype" |> Logger.logSimple logger
+        | _ -> event Error "Invalid Servertype" |> Logger.logSimple logger
     with ex -> event Error ex.Message |> Logger.logSimple logger
